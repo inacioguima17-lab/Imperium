@@ -288,6 +288,49 @@ input,select,textarea{font-family:inherit;}
 .empty .diamond{width:32px;height:32px;margin:0 auto 16px;opacity:.8;}
 .empty .diamond svg path{stroke:#c9a24b;fill:none;}
 
+/* Login */
+.login-screen{
+  position:fixed;inset:0;z-index:900;
+  display:flex;align-items:center;justify-content:center;padding:20px;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(201,162,75,0.10), transparent 40%),
+    radial-gradient(circle at 0% 100%, rgba(201,162,75,0.08), transparent 45%),
+    var(--ink);
+}
+.login-card{
+  width:100%;max-width:400px;
+  background:linear-gradient(155deg,#171310,#0f0c0a);
+  border:1px solid var(--line);border-radius:12px;
+  box-shadow:0 40px 80px rgba(0,0,0,.5);
+  padding:36px 32px 30px;
+  animation:pop .25s cubic-bezier(.2,.8,.3,1);
+}
+.login-brand{display:flex;align-items:center;gap:12px;margin-bottom:26px;}
+.login-brand .diamond{width:28px;height:28px;filter:drop-shadow(0 0 6px rgba(201,162,75,.45));}
+.login-brand .diamond svg path{fill:none;stroke:var(--gold);stroke-width:1.1;}
+.login-brand h1{font-size:24px;color:var(--gold-light);letter-spacing:.03em;}
+.login-brand span{display:block;font-size:9px;letter-spacing:.24em;color:var(--bronze);text-transform:uppercase;margin-top:3px;}
+.login-card h2{color:var(--cream);font-size:17px;font-weight:400;margin-bottom:22px;letter-spacing:.01em;}
+.login-card .field{margin-bottom:16px;}
+.login-card .field label{color:var(--gold-dim);}
+.login-card .field input{
+  background:rgba(255,255,255,.04);border:1px solid var(--line);color:var(--cream);
+}
+.login-card .field input:focus{outline:none;border-color:var(--gold);background:rgba(255,255,255,.06);}
+.login-card .field input::placeholder{color:#5c564a;}
+.login-error{
+  display:none;font-size:12.5px;color:#f2c9c2;background:#241110;border:1px solid var(--danger);
+  border-radius:6px;padding:9px 12px;margin-bottom:16px;
+}
+.login-error.show{display:block;}
+.login-card .btn.block{margin-top:6px;}
+.login-card .btn[disabled]{opacity:.6;pointer-events:none;}
+
+body:not(.is-authed) #app{display:none;}
+body:not(.is-authed) .topbar{display:none!important;}
+body:not(.is-authed) .backdrop-nav{display:none!important;}
+body.is-authed .login-screen{display:none;}
+
 /* Modal */
 .overlay{
   position:fixed;inset:0;background:rgba(10,8,6,.6);backdrop-filter:blur(2px);
@@ -464,6 +507,27 @@ input,select,textarea{font-family:inherit;}
 </head>
 <body>
 
+<div class="login-screen" id="loginScreen">
+  <div class="login-card">
+    <div class="login-brand">
+      <div class="diamond">
+        <svg viewBox="0 0 24 24"><path d="M4 8 L12 3 L20 8 L12 21 Z M4 8 L20 8 M8.5 8 L12 3 L15.5 8 M8.5 8 L12 21 M15.5 8 L12 21" fill="none" stroke="#c9a24b" stroke-width="1.1"/></svg>
+      </div>
+      <div>
+        <h1>Imperium</h1>
+        <span>gestão de joias</span>
+      </div>
+    </div>
+    <h2>Entre com sua conta para acessar o painel</h2>
+    <div class="login-error" id="loginError"></div>
+    <form id="loginForm">
+      <div class="field"><label>E-mail</label><input type="email" id="loginEmail" placeholder="seu@email.com" autocomplete="username" required></div>
+      <div class="field"><label>Senha</label><input type="password" id="loginPassword" placeholder="••••••••" autocomplete="current-password" required></div>
+      <button type="submit" class="btn block" id="loginSubmitBtn">Entrar</button>
+    </form>
+  </div>
+</div>
+
 <div class="topbar">
   <button id="menuBtn" aria-label="Abrir menu">☰</button>
   <h1 id="topbarBrandName">Imperium</h1>
@@ -488,6 +552,7 @@ input,select,textarea{font-family:inherit;}
         <span class="eyebrow">Cotação do ouro /g</span>
       </div>
       <div class="val" id="sideGoldQuote">R$ 0,00</div>
+      <button class="btn ghost sm block" id="logoutBtn" style="margin-top:14px;color:#cfc7b8;border-color:var(--line);">Sair</button>
     </div>
   </aside>
 
@@ -548,21 +613,151 @@ function toast(msg){
   window.__toastTimer=setTimeout(()=>t.classList.remove('show'),2600);
 }
 
-/* ============================= STORAGE (Supabase — REST direto via fetch, sem CDN externo) ============================= */
+/* ============================= AUTH (Supabase Authentication — REST direto via fetch) ============================= */
 const SUPABASE_URL = 'https://ckgrbghlhnlwcosyuvyh.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_xs3BBu60m1I6fvLlUfQrSg_WpA6PmOf';
 const PHOTOS_BUCKET = 'photos';
-const SB_HEADERS = {
+const AUTH_STORAGE_KEY = 'imperium_auth_session';
+
+let SESSION = null; // { access_token, refresh_token, expires_at, user }
+
+function getAuthHeader(){
+  return SESSION && SESSION.access_token ? SESSION.access_token : SUPABASE_ANON_KEY;
+}
+function loadStoredSession(){
+  try{
+    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+function persistSession(session){
+  SESSION = session;
+  try{ localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(session)); }catch(e){}
+}
+function clearStoredSession(){
+  SESSION = null;
+  try{ localStorage.removeItem(AUTH_STORAGE_KEY); }catch(e){}
+}
+function isSessionExpired(session){
+  if(!session || !session.expires_at) return true;
+  return (Date.now()/1000) > (session.expires_at - 30); // 30s de folga
+}
+async function authFetch(path, body){
+  const res = await fetch(`${SUPABASE_URL}${path}`, {
+    method:'POST',
+    headers:{ 'apikey': SUPABASE_ANON_KEY, 'Content-Type':'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(()=>null);
+  if(!res.ok){
+    const msg = (data && (data.error_description || data.msg || data.error)) || 'Falha na autenticação.';
+    throw new Error(msg);
+  }
+  return data;
+}
+function toSession(data){
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token,
+    expires_at: data.expires_at || (Math.floor(Date.now()/1000) + (data.expires_in||3600)),
+    user: data.user || null,
+  };
+}
+async function signInWithPassword(email, password){
+  const data = await authFetch('/auth/v1/token?grant_type=password', { email, password });
+  const session = toSession(data);
+  persistSession(session);
+  return session;
+}
+async function refreshSession(refresh_token){
+  const data = await authFetch('/auth/v1/token?grant_type=refresh_token', { refresh_token });
+  const session = toSession(data);
+  persistSession(session);
+  return session;
+}
+async function signOut(){
+  if(SESSION && SESSION.access_token){
+    try{
+      await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+        method:'POST',
+        headers:{ 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SESSION.access_token}` },
+      });
+    }catch(e){ /* ignora erro de rede no logout */ }
+  }
+  clearStoredSession();
+}
+
+function showLoginScreen(message){
+  document.body.classList.remove('is-authed');
+  const err = document.getElementById('loginError');
+  if(message){ err.textContent = message; err.classList.add('show'); }
+  else { err.textContent=''; err.classList.remove('show'); }
+  const submitBtn = document.getElementById('loginSubmitBtn');
+  submitBtn.disabled = false; submitBtn.textContent = 'Entrar';
+}
+function showApp(){
+  document.body.classList.add('is-authed');
+}
+
+document.getElementById('loginForm').addEventListener('submit', async (e)=>{
+  e.preventDefault();
+  const email = document.getElementById('loginEmail').value.trim();
+  const password = document.getElementById('loginPassword').value;
+  const submitBtn = document.getElementById('loginSubmitBtn');
+  const err = document.getElementById('loginError');
+  err.classList.remove('show'); err.textContent='';
+  submitBtn.disabled = true; submitBtn.textContent = 'Entrando...';
+  try{
+    await signInWithPassword(email, password);
+    showApp();
+    await boot();
+  }catch(e2){
+    showLoginScreen(e2.message === 'Invalid login credentials' ? 'E-mail ou senha inválidos.' : e2.message);
+  }
+});
+
+document.getElementById('logoutBtn').addEventListener('click', async ()=>{
+  await signOut();
+  document.getElementById('loginPassword').value='';
+  showLoginScreen();
+});
+
+async function bootstrapAuth(){
+  let session = loadStoredSession();
+  if(!session){ showLoginScreen(); return false; }
+  if(isSessionExpired(session)){
+    try{
+      session = await refreshSession(session.refresh_token);
+    }catch(e){
+      clearStoredSession();
+      showLoginScreen();
+      return false;
+    }
+  } else {
+    SESSION = session;
+  }
+  showApp();
+  return true;
+}
+
+/* ============================= STORAGE (Supabase — REST direto via fetch, sem CDN externo) ============================= */
+const SB_HEADERS = () => ({
   'apikey': SUPABASE_ANON_KEY,
-  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+  'Authorization': `Bearer ${getAuthHeader()}`,
   'Content-Type': 'application/json',
-};
+});
 
 async function sbFetch(path, options={}){
   const res = await fetch(`${SUPABASE_URL}${path}`, {
     ...options,
-    headers: { ...SB_HEADERS, ...(options.headers||{}) },
+    headers: { ...SB_HEADERS(), ...(options.headers||{}) },
   });
+  if(res.status===401){
+    // sessão expirada/invalida durante o uso: volta para a tela de login
+    clearStoredSession();
+    showLoginScreen('Sua sessão expirou. Faça login novamente.');
+    throw new Error('Sessão expirada.');
+  }
   if(!res.ok){
     const msg = await res.text().catch(()=> res.statusText);
     throw new Error(`Supabase ${res.status}: ${msg}`);
@@ -634,7 +829,7 @@ async function uploadPhoto(blob){
     method:'POST',
     headers:{
       'apikey': SUPABASE_ANON_KEY,
-      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Authorization': `Bearer ${getAuthHeader()}`,
       'Content-Type':'image/jpeg',
     },
     body: blob,
@@ -652,7 +847,7 @@ async function deletePhoto(url){
   try{
     await fetch(`${SUPABASE_URL}/storage/v1/object/${PHOTOS_BUCKET}/${filePath}`, {
       method:'DELETE',
-      headers:{ 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
+      headers:{ 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${getAuthHeader()}` },
     });
   }catch(e){ console.error(e); }
 }
@@ -1478,6 +1673,7 @@ document.getElementById('menuBtn').addEventListener('click', ()=>{
 document.getElementById('navBackdrop').addEventListener('click', closeMobileNav);
 
 /* ============================= INIT ============================= */
+let __appStarted = false;
 async function init(){
   await loadState();
   if(!STATE.pieces.length){
@@ -1492,7 +1688,16 @@ async function init(){
   applyBrand();
   render();
 }
-init();
+async function boot(){
+  // só inicializa o app (dados/UI) depois de confirmar que há uma sessão autenticada
+  if(__appStarted) return;
+  __appStarted = true;
+  await init();
+}
+(async ()=>{
+  const authed = await bootstrapAuth();
+  if(authed) await boot();
+})();
 </script>
 </body>
 </html>
