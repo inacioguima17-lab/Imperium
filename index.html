@@ -3,9 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Áurea · Gestão de Joias</title>
-<!-- Dados e fotos sincronizados na nuvem via Supabase. -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<title>Imperium · Gestão de Joias</title>
+<!-- Dados e fotos sincronizados na nuvem via Supabase (chamadas fetch diretas, sem depender de CDN externo). -->
 <style>
 :root{
   --ink:#0a0a0a;
@@ -467,7 +466,7 @@ input,select,textarea{font-family:inherit;}
 
 <div class="topbar">
   <button id="menuBtn" aria-label="Abrir menu">☰</button>
-  <h1 id="topbarBrandName">Áurea</h1>
+  <h1 id="topbarBrandName">Imperium</h1>
   <span class="eyebrow" style="color:var(--gold)">joias</span>
 </div>
 <div class="backdrop-nav" id="navBackdrop"></div>
@@ -479,7 +478,7 @@ input,select,textarea{font-family:inherit;}
         <svg viewBox="0 0 24 24"><path d="M4 8 L12 3 L20 8 L12 21 Z M4 8 L20 8 M8.5 8 L12 3 L15.5 8 M8.5 8 L12 21 M15.5 8 L12 21" fill="none" stroke="#c9a24b" stroke-width="1.1"/></svg>
       </div>
       <div>
-        <h1 id="sidebarBrandName">Áurea</h1>
+        <h1 id="sidebarBrandName">Imperium</h1>
         <span id="sidebarBrandTagline">gestão de joias em ouro</span>
       </div>
     </div>
@@ -518,12 +517,6 @@ const TAG_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 const GEM_SVG_BIG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M4 8 L12 3 L20 8 L12 21 Z"/></svg>';
 const WA_SVG = '<svg viewBox="0 0 32 32" fill="currentColor"><path d="M16 3C9 3 3 9 3 16c0 2.4.6 4.6 1.8 6.6L3 29l6.6-1.7A13 13 0 0 0 16 29c7 0 13-6 13-13S23 3 16 3Zm0 23.6c-2.1 0-4.1-.6-5.8-1.6l-.4-.2-3.9 1 1-3.8-.3-.4A10.6 10.6 0 1 1 26.6 16 10.6 10.6 0 0 1 16 26.6Zm5.8-7.9c-.3-.2-1.9-.9-2.2-1s-.5-.2-.7.2-.8 1-1 1.2-.4.2-.7.1a8.7 8.7 0 0 1-2.6-1.6 9.6 9.6 0 0 1-1.8-2.2c-.2-.3 0-.5.1-.7l.5-.6c.2-.2.2-.4.3-.6a.6.6 0 0 0 0-.6c-.1-.2-.7-1.7-1-2.3-.2-.6-.5-.5-.7-.5h-.6a1.2 1.2 0 0 0-.8.4 3.5 3.5 0 0 0-1.1 2.6c0 1.5 1.1 3 1.3 3.2s2.2 3.4 5.4 4.7a11 11 0 0 0 3.7 1c.6 0 1.2-.1 1.7-.4a2.9 2.9 0 0 0 1.8-1.8c.1-.3.1-1-.1-1.2Z"/></svg>';
 
-/* ============================= SUPABASE ============================= */
-const SUPABASE_URL = 'https://ckgrbghlhnlwcosyuvyh.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_xs3BBu60m1I6fvLlUfQrSg_WpA6PmOf';
-const PHOTOS_BUCKET = 'photos';
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
 /* ============================= CONFIG ============================= */
 const CATEGORIES = ['Anel','Corrente','Pulseira','Pingente','Brinco','Relógio','Outro'];
 const PURITY = { '10k':0.417, '14k':0.585, '18k':0.750, '22k':0.916, '24k':0.999 };
@@ -555,28 +548,42 @@ function toast(msg){
   window.__toastTimer=setTimeout(()=>t.classList.remove('show'),2600);
 }
 
-/* ============================= STORAGE (Supabase — banco na nuvem) ============================= */
+/* ============================= STORAGE (Supabase — REST direto via fetch, sem CDN externo) ============================= */
+const SUPABASE_URL = 'https://ckgrbghlhnlwcosyuvyh.supabase.co';
+const SUPABASE_ANON_KEY = 'sb_publishable_xs3BBu60m1I6fvLlUfQrSg_WpA6PmOf';
+const PHOTOS_BUCKET = 'photos';
+const SB_HEADERS = {
+  'apikey': SUPABASE_ANON_KEY,
+  'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+  'Content-Type': 'application/json',
+};
+
+async function sbFetch(path, options={}){
+  const res = await fetch(`${SUPABASE_URL}${path}`, {
+    ...options,
+    headers: { ...SB_HEADERS, ...(options.headers||{}) },
+  });
+  if(!res.ok){
+    const msg = await res.text().catch(()=> res.statusText);
+    throw new Error(`Supabase ${res.status}: ${msg}`);
+  }
+  if(res.status===204) return null;
+  const text = await res.text();
+  return text ? JSON.parse(text) : null;
+}
+
 async function loadState(){
   try{
-    const { data, error } = await supabase
-      .from('pieces')
-      .select('id, payload')
-      .order('updated_at', { ascending:true });
-    if(error) throw error;
-    STATE.pieces = (data||[]).map(row => ({ ...row.payload, id: row.id }));
+    const rows = await sbFetch('/rest/v1/pieces?select=id,payload&order=updated_at.asc');
+    STATE.pieces = (rows||[]).map(row => ({ ...row.payload, id: row.id }));
   }catch(e){
     console.error(e);
     STATE.pieces = [];
     toast('Erro ao carregar peças do Supabase.');
   }
   try{
-    const { data, error } = await supabase
-      .from('settings')
-      .select('payload')
-      .eq('id', 1)
-      .maybeSingle();
-    if(error) throw error;
-    if(data && data.payload) STATE.settings = { ...STATE.settings, ...data.payload };
+    const rows = await sbFetch('/rest/v1/settings?select=payload&id=eq.1');
+    if(rows && rows[0] && rows[0].payload) STATE.settings = { ...STATE.settings, ...rows[0].payload };
   }catch(e){
     console.error(e);
     /* mantém os valores padrão */
@@ -589,16 +596,18 @@ async function savePieces(){
       return { id, payload: rest, updated_at: new Date().toISOString() };
     });
     if(rows.length){
-      const { error } = await supabase.from('pieces').upsert(rows, { onConflict:'id' });
-      if(error) throw error;
+      await sbFetch('/rest/v1/pieces?on_conflict=id', {
+        method:'POST',
+        headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
+        body: JSON.stringify(rows),
+      });
     }
-    const { data: existing, error: selError } = await supabase.from('pieces').select('id');
-    if(selError) throw selError;
+    const existing = await sbFetch('/rest/v1/pieces?select=id');
     const currentIds = new Set(STATE.pieces.map(p=>p.id));
     const toDelete = (existing||[]).map(r=>r.id).filter(id=>!currentIds.has(id));
     if(toDelete.length){
-      const { error: delError } = await supabase.from('pieces').delete().in('id', toDelete);
-      if(delError) throw delError;
+      const list = toDelete.map(id=>`"${id}"`).join(',');
+      await sbFetch(`/rest/v1/pieces?id=in.(${list})`, { method:'DELETE', headers:{ 'Prefer':'return=minimal' } });
     }
   }catch(e){
     console.error(e);
@@ -607,14 +616,45 @@ async function savePieces(){
 }
 async function saveSettings(){
   try{
-    const { error } = await supabase
-      .from('settings')
-      .upsert({ id:1, payload: STATE.settings, updated_at: new Date().toISOString() }, { onConflict:'id' });
-    if(error) throw error;
+    await sbFetch('/rest/v1/settings?on_conflict=id', {
+      method:'POST',
+      headers:{ 'Prefer':'resolution=merge-duplicates,return=minimal' },
+      body: JSON.stringify([{ id:1, payload: STATE.settings, updated_at: new Date().toISOString() }]),
+    });
   }catch(e){
     console.error(e);
     toast('Erro ao salvar configurações no Supabase.');
   }
+}
+
+/* ---- Storage de fotos (upload direto via fetch para o Supabase Storage) ---- */
+async function uploadPhoto(blob){
+  const filePath = `${uid()}-${Date.now()}.jpg`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${PHOTOS_BUCKET}/${filePath}`, {
+    method:'POST',
+    headers:{
+      'apikey': SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+      'Content-Type':'image/jpeg',
+    },
+    body: blob,
+  });
+  if(!res.ok){
+    const msg = await res.text().catch(()=> res.statusText);
+    throw new Error(`Supabase Storage ${res.status}: ${msg}`);
+  }
+  return `${SUPABASE_URL}/storage/v1/object/public/${PHOTOS_BUCKET}/${filePath}`;
+}
+async function deletePhoto(url){
+  if(!url || !url.includes(`/object/public/${PHOTOS_BUCKET}/`)) return;
+  const filePath = url.split(`/object/public/${PHOTOS_BUCKET}/`)[1];
+  if(!filePath) return;
+  try{
+    await fetch(`${SUPABASE_URL}/storage/v1/object/${PHOTOS_BUCKET}/${filePath}`, {
+      method:'DELETE',
+      headers:{ 'apikey': SUPABASE_ANON_KEY, 'Authorization': `Bearer ${SUPABASE_ANON_KEY}` },
+    });
+  }catch(e){ console.error(e); }
 }
 
 /* ---- Backup manual (exportar/importar .json) ---- */
@@ -624,7 +664,7 @@ function exportBackup(){
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `aurea-backup-${todayISO()}.json`;
+  a.download = `imperium-backup-${todayISO()}.json`;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
   toast('Backup exportado com sucesso.');
@@ -1067,7 +1107,7 @@ function viewSettings(){
   <div class="card" style="max-width:520px;margin-bottom:20px;">
     <div class="section-title" style="margin-top:0;"><span class="diamond">${GEM_SVG_BIG}</span><h3>Identidade da loja</h3></div>
     <div class="form-grid">
-      <div class="field"><label>Nome da loja</label><input id="f_storeName" value="${STATE.settings.storeName||'Áurea'}" placeholder="Ex: Joalheria Prime"></div>
+      <div class="field"><label>Nome da loja</label><input id="f_storeName" value="${STATE.settings.storeName||'Imperium'}" placeholder="Ex: Joalheria Prime"></div>
       <div class="field"><label>Subtítulo (opcional)</label><input id="f_storeTagline" value="${STATE.settings.storeTagline||'gestão de joias em ouro'}" placeholder="Ex: joias & relógios"></div>
     </div>
     <button class="btn sm" id="saveStoreName" style="margin-top:12px;">Salvar nome</button>
@@ -1096,7 +1136,7 @@ function viewSettings(){
 }
 
 function applyBrand(){
-  const name = STATE.settings.storeName || 'Áurea';
+  const name = STATE.settings.storeName || 'Imperium';
   const tagline = STATE.settings.storeTagline || 'gestão de joias em ouro';
   document.getElementById('topbarBrandName').textContent = name;
   document.getElementById('sidebarBrandName').textContent = name;
@@ -1185,13 +1225,9 @@ function renderPhotoRow(){
   document.getElementById('addPhotoBtn').onclick = ()=>document.getElementById('photoInput').click();
   row.querySelectorAll('[data-rm-photo]').forEach(b=>{
     b.onclick=()=>{
-      const idx = Number(b.dataset.rmPhoto);
-      const [removedUrl] = STATE.pendingPhotos.splice(idx,1);
+      const [removedUrl] = STATE.pendingPhotos.splice(Number(b.dataset.rmPhoto),1);
       renderPhotoRow();
-      if(removedUrl && removedUrl.includes(`/${PHOTOS_BUCKET}/`)){
-        const filePath = removedUrl.split(`/${PHOTOS_BUCKET}/`)[1];
-        if(filePath) supabase.storage.from(PHOTOS_BUCKET).remove([filePath]).catch(()=>{});
-      }
+      deletePhoto(removedUrl);
     };
   });
 }
@@ -1213,13 +1249,8 @@ function handlePhotoUpload(e){
           if(!blob) return;
           toast('Enviando foto...');
           try{
-            const filePath = `${uid()}-${Date.now()}.jpg`;
-            const { error: upError } = await supabase.storage
-              .from(PHOTOS_BUCKET)
-              .upload(filePath, blob, { contentType:'image/jpeg', upsert:false });
-            if(upError) throw upError;
-            const { data } = supabase.storage.from(PHOTOS_BUCKET).getPublicUrl(filePath);
-            STATE.pendingPhotos.push(data.publicUrl);
+            const publicUrl = await uploadPhoto(blob);
+            STATE.pendingPhotos.push(publicUrl);
             renderPhotoRow();
             toast('Foto enviada.');
           }catch(err){
@@ -1364,7 +1395,7 @@ function renderPresentation(){
       <div class="brandline">
         <span class="diamond">${GEM_SVG_BIG}</span>
         <div>
-          <h2>${STATE.settings.storeName||'Áurea'}</h2>
+          <h2>${STATE.settings.storeName||'Imperium'}</h2>
           <div class="eyebrow">Catálogo${STATE.presentationCategory? ' · '+STATE.presentationCategory:''}</div>
         </div>
       </div>
@@ -1424,7 +1455,7 @@ function afterRender(){
       e.target.value = '';
     };
     document.getElementById('saveStoreName').onclick = async ()=>{
-      STATE.settings.storeName = document.getElementById('f_storeName').value.trim() || 'Áurea';
+      STATE.settings.storeName = document.getElementById('f_storeName').value.trim() || 'Imperium';
       STATE.settings.storeTagline = document.getElementById('f_storeTagline').value.trim();
       await saveSettings();
       applyBrand();
